@@ -1,4 +1,4 @@
-const BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const BASE = process.env.REACT_APP_API_URL || 'https://ai-db-agent-uuwa.onrender.com';
 
 export async function sendChat(message, sessionId) {
   const res = await fetch(`${BASE}/chat`, {
