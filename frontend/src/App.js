@@ -37,7 +37,9 @@ export default function App() {
   const [schema, setSchema] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showSchema, setShowSchema] = useState(false);
-  const [sessions, setSessions] = useState([{ id: sessionId, title: 'Current session', active: true }]);
+ const [sessions] = useState([
+  { id: sessionId, title: 'Current session', active: true }
+]);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
