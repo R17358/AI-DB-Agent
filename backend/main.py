@@ -1,9 +1,9 @@
 import dns.resolver
 
 # DNS patch FIRST
-resolver = dns.resolver.Resolver(configure=False)
-resolver.nameservers = ['1.1.1.1', '8.8.8.8']
-dns.resolver.default_resolver = resolver
+# resolver = dns.resolver.Resolver(configure=False)
+# resolver.nameservers = ['1.1.1.1', '8.8.8.8']
+# dns.resolver.default_resolver = resolver
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,7 +20,7 @@ app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://querymind-db-agent.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
