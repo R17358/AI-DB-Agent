@@ -1,11 +1,32 @@
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+import asyncio
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
 from config import settings
 from db_connector import get_connector
 from llm_factory import get_llm
+
+
+# ── Human-readable error parser ──────────────────────────────────────────────
+def parse_llm_error(e: Exception) -> str:
+    msg = str(e)
+    msg_lower = msg.lower()
+
+    if any(x in msg_lower for x in ["quota", "exhausted", "resource_exhausted", "429", "rate limit", "too many requests"]):
+        return "⚠️ API quota exhausted or rate limit hit. Please wait a moment and try again, or check your API plan limits."
+    if any(x in msg_lower for x in ["invalid api key", "api_key", "authentication", "401", "unauthorized", "unauthenticated"]):
+        return "🔑 Invalid or missing API key. Please check LLM_API_KEY in your .env file."
+    if any(x in msg_lower for x in ["model not found", "does not exist", "invalid model", "404"]):
+        return f"🤖 Model not found: '{settings.LLM_MODEL}'. Check LLM_MODEL in your .env file."
+    if any(x in msg_lower for x in ["connection", "timeout", "network", "refused", "unreachable"]):
+        return "🌐 Network error reaching the AI provider. Check your internet connection."
+    if any(x in msg_lower for x in ["billing", "payment", "insufficient"]):
+        return "💳 API billing issue. Please check your account balance with the AI provider."
+    if any(x in msg_lower for x in ["context length", "token", "maximum context"]):
+        return "📏 Message too long for the model's context window. Try starting a new chat."
+    return f"LLM Error: {msg}"
 
 
 # ── Singleton memory per session ────────────────────────────────────────────
@@ -132,7 +153,20 @@ class AgentResponse:
         self.intent: str = "chat"
 
 
-async def invoke_agent(user_message: str, session_id: str) -> AgentResponse:
+async def invoke_agent(
+    user_message: str,
+    session_id: str,
+    status_cb: Optional[Callable[[str, str], None]] = None,
+) -> AgentResponse:
+    """
+    status_cb(stage, message) is called at each processing step so the
+    frontend can show live progress.  Stages: thinking | querying | running |
+    summarizing | done | error
+    """
+    async def emit(stage: str, msg: str):
+        if status_cb:
+            await status_cb(stage, msg)
+
     response = AgentResponse()
     llm = get_llm()
     memory = get_memory(session_id)
@@ -140,32 +174,38 @@ async def invoke_agent(user_message: str, session_id: str) -> AgentResponse:
 
     system_prompt = build_system_prompt(schema_str)
     history: List = memory.chat_memory.messages
-
     messages = [SystemMessage(content=system_prompt)] + history + [HumanMessage(content=user_message)]
 
+    # ── Step 1: ask the LLM ─────────────────────────────────────────────────
+    await emit("thinking", "Thinking…")
     try:
         ai_response = await llm.ainvoke(messages)
         raw_text = ai_response.content
     except Exception as e:
-        response.error = f"LLM error: {e}"
-        response.message = f"Sorry, I encountered an error communicating with the AI model: {e}"
+        err_msg = parse_llm_error(e)
+        await emit("error", err_msg)
+        response.error = err_msg
+        response.message = err_msg
         return response
 
     # Save to memory
     memory.chat_memory.add_user_message(user_message)
     memory.chat_memory.add_ai_message(raw_text)
 
-    # Detect db_query block
+    # ── Step 2: detect db_query block ────────────────────────────────────────
     db_block_match = re.search(r"```db_query\s*([\s\S]*?)```", raw_text, re.DOTALL)
 
     if db_block_match:
         response.intent = "db_query"
         json_str = db_block_match.group(1).strip()
+
+        await emit("querying", "Generating query…")
         try:
             parsed = json.loads(json_str)
         except json.JSONDecodeError as e:
             response.message = raw_text.replace(db_block_match.group(0), "").strip()
             response.error = f"Failed to parse query JSON: {e}"
+            await emit("error", response.error)
             return response
 
         query = parsed.get("query")
@@ -175,16 +215,18 @@ async def invoke_agent(user_message: str, session_id: str) -> AgentResponse:
         response.suggest_visualization = parsed.get("suggest_visualization")
         response.visualization_config = parsed.get("visualization_config")
 
-        # Strip the block from conversational text
         convo_text = raw_text.replace(db_block_match.group(0), "").strip()
         response.message = convo_text if convo_text else response.query_explanation
 
         if not response.is_read_only:
-            response.error = "⚠️ This query appears to be a write operation. Write operations are disabled for safety."
+            msg = "⚠️ Write operations are disabled for safety. Only SELECT / read queries are allowed."
+            response.error = msg
+            await emit("error", msg)
             response.rows = None
             return response
 
-        # Execute
+        # ── Step 3: execute ──────────────────────────────────────────────────
+        await emit("running", "Executing query on database…")
         try:
             connector = get_connector()
             rows, columns, executed_query = connector.execute(query)
@@ -192,25 +234,39 @@ async def invoke_agent(user_message: str, session_id: str) -> AgentResponse:
             response.columns = columns
             response.row_count = len(rows)
             response.query = executed_query
+        except Exception as e:
+            err_msg = f"Database error: {e}"
+            response.error = err_msg
+            response.message = f"Query was generated but failed to run: {e}"
+            await emit("error", err_msg)
+            return response
 
-            # Ask LLM to summarize results
-            if rows:
+        # ── Step 4: summarize ────────────────────────────────────────────────
+        if rows:
+            await emit("summarizing", f"Analysing {len(rows)} rows…")
+            try:
                 sample = rows[:5]
-                summary_prompt = f"""The user asked: "{user_message}"
-The query returned {len(rows)} rows. Here's a sample: {json.dumps(sample, default=str)}
-Give a concise, insightful 2-3 sentence summary of these results in plain English. Don't repeat the raw data."""
-                summary_msgs = [SystemMessage(content="You are a data analyst. Be concise and insightful."),
-                                HumanMessage(content=summary_prompt)]
+                summary_prompt = (
+                    f'The user asked: "{user_message}"\n'
+                    f"The query returned {len(rows)} rows. Sample: {json.dumps(sample, default=str)}\n"
+                    "Give a concise, insightful 2-3 sentence summary in plain English. Do not repeat raw data."
+                )
+                summary_msgs = [
+                    SystemMessage(content="You are a data analyst. Be concise and insightful."),
+                    HumanMessage(content=summary_prompt),
+                ]
                 summary_resp = await llm.ainvoke(summary_msgs)
                 response.message = summary_resp.content
-            else:
-                response.message = "The query returned no results."
+            except Exception as e:
+                # Summarisation failure is non-fatal — show results without summary
+                response.message = f"Query returned {len(rows)} rows."
+                response.error = f"Summary generation failed: {parse_llm_error(e)}"
+        else:
+            response.message = "The query returned no results."
 
-        except Exception as e:
-            response.error = f"Query execution error: {e}"
-            response.message = f"I generated the query but encountered an error running it: {e}"
     else:
         response.intent = "chat"
         response.message = raw_text
 
+    await emit("done", "Done")
     return response
