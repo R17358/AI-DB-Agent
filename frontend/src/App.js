@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import Message from './components/Message';
-import { sendChat, clearSession, getHealth, getSchema } from './utils/api';
+import StatusBar from './components/StatusBar';
+import useWebSocket from './hooks/useWebSocket';
+import { clearSession, getHealth, getSchema, sendChat } from './utils/api';
 
 const HINTS = [
   "Show me all tables",
@@ -13,12 +15,12 @@ const HINTS = [
 ];
 
 const FEATURES = [
-  { icon: '🔍', name: 'Smart Queries', desc: 'Generates SQL or MongoDB queries automatically from natural language.' },
-  { icon: '📊', name: 'Live Viz', desc: 'Instantly charts your data with bar, line, pie, area charts and more.' },
-  { icon: '🧠', name: 'Memory', desc: 'Remembers conversation context across your session.' },
-  { icon: '🔒', name: 'Privacy Guard', desc: 'Sensitive columns are always masked — passwords, tokens, SSNs.' },
-  { icon: '💬', name: 'Dual Mode', desc: 'Knows when to query the DB and when to just chat with you.' },
-  { icon: '⚡', name: 'Any DB', desc: 'Works with PostgreSQL, MySQL, SQLite, MongoDB via .env config.' },
+  { icon: '🔍', name: 'Smart Queries', desc: 'Generates SQL or MongoDB queries from natural language.' },
+  { icon: '📊', name: 'Live Viz', desc: 'Charts results with bar, line, pie, area charts and more.' },
+  { icon: '🧠', name: 'Memory', desc: 'Remembers context across your session.' },
+  { icon: '🔒', name: 'Privacy Guard', desc: 'Sensitive columns are always masked.' },
+  { icon: '💬', name: 'Dual Mode', desc: 'Knows when to query the DB vs just chat.' },
+  { icon: '⚡', name: 'Any DB', desc: 'PostgreSQL, MySQL, SQLite, MongoDB via .env.' },
 ];
 
 function formatTime() {
@@ -31,188 +33,225 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [dbStatus, setDbStatus] = useState('connecting');
+  const [status, setStatus] = useState({ stage: null, message: '' });
+  const [dbConnected, setDbConnected] = useState('connecting');
   const [dbType, setDbType] = useState('');
   const [model, setModel] = useState('');
   const [schema, setSchema] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showSchema, setShowSchema] = useState(false);
- const [sessions] = useState([
-  { id: sessionId, title: 'Current session', active: true }
-]);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const pendingMessageRef = useRef(null);
 
-  // Theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
-  // Health check
   useEffect(() => {
     const check = async () => {
       const h = await getHealth();
-      setDbStatus(h.db_connected ? 'connected' : 'disconnected');
+      setDbConnected(h.db_connected ? 'connected' : 'disconnected');
       if (h.model) setModel(h.model);
       if (h.db_type) setDbType(h.db_type);
     };
     check();
-    const interval = setInterval(check, 30000);
-    return () => clearInterval(interval);
+    const t = setInterval(check, 30000);
+    return () => clearInterval(t);
   }, []);
 
-  // Schema
   useEffect(() => {
     getSchema().then(d => setSchema(d.schema || ''));
   }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
+  }, [messages, loading, status]);
 
+  // ── WebSocket callbacks ────────────────────────────────────────
+  const handleStatus = useCallback((stage, message) => {
+    setStatus({ stage, message });
+    if (stage === 'done' || stage === 'error') {
+      setTimeout(() => setStatus({ stage: null, message: '' }), stage === 'error' ? 4000 : 800);
+    }
+  }, []);
+
+  const handleResponse = useCallback((data) => {
+    setLoading(false);
+    setStatus({ stage: null, message: '' });
+    const aiMsg = {
+      id: uuidv4(),
+      role: 'assistant',
+      content: data.message,
+      intent: data.intent,
+      query: data.query,
+      query_explanation: data.query_explanation,
+      is_read_only: data.is_read_only,
+      rows: data.rows,
+      columns: data.columns,
+      row_count: data.row_count,
+      error: data.error,
+      suggest_visualization: data.suggest_visualization,
+      visualization_config: data.visualization_config,
+      time: formatTime(),
+    };
+    setMessages(prev => [...prev, aiMsg]);
+  }, []);
+
+  const handleWsError = useCallback((msg) => {
+    setLoading(false);
+    setStatus({ stage: null, message: '' });
+    setMessages(prev => [...prev, {
+      id: uuidv4(), role: 'assistant', content: null, intent: 'chat',
+      error: `Connection error: ${msg}`, time: formatTime(),
+    }]);
+  }, []);
+
+  const { send, connected } = useWebSocket(sessionId, {
+    onStatus: handleStatus,
+    onResponse: handleResponse,
+    onError: handleWsError,
+  });
+
+  // ── Send message ───────────────────────────────────────────────
   const handleSend = useCallback(async (text) => {
     const msg = (text || input).trim();
     if (!msg || loading) return;
     setInput('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
 
     const userMsg = { id: uuidv4(), role: 'user', content: msg, time: formatTime() };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
+    setStatus({ stage: 'thinking', message: 'Thinking…' });
 
-    try {
-      const res = await sendChat(msg, sessionId);
-      const aiMsg = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: res.message,
-        intent: res.intent,
-        query: res.query,
-        query_explanation: res.query_explanation,
-        is_read_only: res.is_read_only,
-        rows: res.rows,
-        columns: res.columns,
-        row_count: res.row_count,
-        error: res.error,
-        suggest_visualization: res.suggest_visualization,
-        visualization_config: res.visualization_config,
-        time: formatTime(),
-      };
-      setMessages(prev => [...prev, aiMsg]);
-    } catch (e) {
-      setMessages(prev => [...prev, {
-        id: uuidv4(),
-        role: 'assistant',
-        content: null,
-        intent: 'chat',
-        error: `Failed to reach server: ${e.message}. Make sure the backend is running on port 8000.`,
-        time: formatTime(),
-      }]);
-    } finally {
-      setLoading(false);
+    // Try WebSocket first, fall back to REST
+    const sent = send(msg);
+    if (!sent) {
+      // WebSocket not ready — use REST and show error details
+      try {
+        const res = await sendChat(msg, sessionId);
+        handleResponse(res);
+      } catch (e) {
+        setLoading(false);
+        setStatus({ stage: null, message: '' });
+
+        // Parse friendly error from fetch failure
+        let errMsg = e.message || 'Unknown error';
+        if (errMsg.includes('Failed to fetch') || errMsg.includes('NetworkError')) {
+          errMsg = '🌐 Cannot reach backend. Make sure the Python server is running on port 8000.';
+        }
+        setMessages(prev => [...prev, {
+          id: uuidv4(), role: 'assistant', content: null, intent: 'chat',
+          error: errMsg, time: formatTime(),
+        }]);
+      }
     }
-  }, [input, loading, sessionId]);
+  }, [input, loading, send, sessionId, handleResponse]);
 
   const handleKey = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
   const handleNewChat = async () => {
     await clearSession(sessionId);
     setMessages([]);
+    setStatus({ stage: null, message: '' });
   };
 
   const parseSchemaForDisplay = () => {
-    if (!schema) return [];
     const lines = schema.split('\n');
-    const tables = [];
-    lines.forEach(line => {
-      if (line.match(/^\s{2}\w/)) {
-        const parts = line.trim().split(':');
-        if (parts.length >= 2) {
-          tables.push({ name: parts[0].trim(), cols: parts[1].split(',').map(c => c.trim()) });
-        }
-      }
-    });
-    return tables;
+    return lines
+      .filter(l => l.match(/^\s{2}\w/))
+      .map(l => {
+        const parts = l.trim().split(':');
+        return parts.length >= 2
+          ? { name: parts[0].trim(), cols: parts[1].split(',').map(c => c.trim()) }
+          : null;
+      })
+      .filter(Boolean);
   };
 
   const schemaItems = parseSchemaForDisplay();
+  const wsStatus = connected ? 'connected' : dbConnected === 'connecting' ? 'connecting' : 'disconnected';
 
   return (
     <div className="app-layout">
       {/* Sidebar */}
-      <aside className={`sidebar ${sidebarOpen ? '' : 'closed'}`} style={!sidebarOpen ? { display: 'none' } : {}}>
-        <div className="sidebar-header">
-          <div className="sidebar-logo">
-            <div className="logo-icon">⚡</div>
-            <span>DB AI Agent</span>
+      {sidebarOpen && (
+        <aside className="sidebar">
+          <div className="sidebar-header">
+            <div className="sidebar-logo">
+              <div className="logo-icon">⚡</div>
+              <span>DB AI Agent</span>
+            </div>
+            <button className="new-chat-btn" onClick={handleNewChat}>
+              <span>+</span> New Chat
+            </button>
           </div>
-          <button className="new-chat-btn" onClick={handleNewChat}>
-            <span>+</span> New Chat
-          </button>
-        </div>
 
-        <div className="sidebar-section-title">Sessions</div>
-        <div className="history-list">
-          {sessions.map(s => (
-            <div key={s.id} className={`history-item ${s.active ? 'active' : ''}`}>
+          <div className="sidebar-section-title">Session</div>
+          <div className="history-list">
+            <div className="history-item active">
               <span>💬</span>
-              <span>{s.title}</span>
+              <span>Current session</span>
             </div>
-          ))}
-        </div>
-
-        {/* Schema */}
-        {schema && (
-          <>
-            <div className="sidebar-section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: '18px' }}>
-              <span>Schema</span>
-              <button onClick={() => setShowSchema(s => !s)}
-                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px' }}>
-                {showSchema ? 'Hide' : 'Show'}
-              </button>
-            </div>
-            {showSchema && (
-              <div className="schema-panel">
-                {schemaItems.map(t => (
-                  <div key={t.name} className="schema-table">
-                    <div className="schema-table-name">{t.name}</div>
-                    <div className="schema-cols">
-                      {t.cols.slice(0, 8).map(c => (
-                        <span key={c} className="schema-col-tag">{c}</span>
-                      ))}
-                      {t.cols.length > 8 && (
-                        <span className="schema-col-tag">+{t.cols.length - 8}</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-
-        <div className="sidebar-footer">
-          <div className="db-status">
-            <span className={`status-dot ${dbStatus}`}></span>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {dbStatus === 'connected' ? `Connected · ${dbType || 'DB'}` :
-               dbStatus === 'connecting' ? 'Connecting…' : 'Disconnected'}
-            </span>
           </div>
-        </div>
-      </aside>
+
+          {schema && (
+            <>
+              <div className="sidebar-section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: '18px' }}>
+                <span>Schema</span>
+                <button onClick={() => setShowSchema(s => !s)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px' }}>
+                  {showSchema ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {showSchema && (
+                <div className="schema-panel">
+                  {schemaItems.map(t => (
+                    <div key={t.name} className="schema-table">
+                      <div className="schema-table-name">{t.name}</div>
+                      <div className="schema-cols">
+                        {t.cols.slice(0, 8).map(c => (
+                          <span key={c} className="schema-col-tag">{c}</span>
+                        ))}
+                        {t.cols.length > 8 && <span className="schema-col-tag">+{t.cols.length - 8}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          <div className="sidebar-footer">
+            {/* DB status */}
+            <div className="db-status" style={{ marginBottom: '6px' }}>
+              <span className={`status-dot ${dbConnected}`}></span>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {dbConnected === 'connected' ? `DB · ${dbType || 'Connected'}` :
+                 dbConnected === 'connecting' ? 'Connecting to DB…' : 'DB Disconnected'}
+              </span>
+            </div>
+            {/* WS status */}
+            <div className="db-status">
+              <span className={`status-dot ${wsStatus}`}></span>
+              <span style={{ flex: 1 }}>
+                {connected ? `Live · ${model || 'AI Ready'}` : 'Reconnecting…'}
+              </span>
+            </div>
+          </div>
+        </aside>
+      )}
 
       {/* Main */}
       <div className="main-area">
         <header className="main-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <button className="icon-btn" onClick={() => setSidebarOpen(s => !s)} title="Toggle sidebar">
-              ☰
-            </button>
+            <button className="icon-btn" onClick={() => setSidebarOpen(s => !s)} title="Toggle sidebar">☰</button>
             <div>
               <div className="header-title">DB AI Agent</div>
               {model && <div className="header-meta">{model}</div>}
@@ -226,19 +265,18 @@ export default function App() {
           </div>
         </header>
 
-        {/* Messages */}
         <div className="messages-area">
           {messages.length === 0 ? (
             <div className="welcome-screen">
               <div className="welcome-icon">⚡</div>
               <div className="welcome-title">Your DB AI Agent</div>
               <div className="welcome-sub">
-                Ask questions in plain English — I'll generate queries, visualize results, and explain everything. 
-                I also retain memory of our conversation.
+                Ask anything in plain English — I'll generate the query, run it, visualize results, and explain everything.
               </div>
               <div className="welcome-features">
                 {FEATURES.map(f => (
-                  <div key={f.name} className="feature-card" onClick={() => handleSend(f.name === 'Smart Queries' ? 'What tables do you have access to?' : f.name)}>
+                  <div key={f.name} className="feature-card"
+                    onClick={() => f.name === 'Smart Queries' && handleSend('What tables do you have access to?')}>
                     <div className="feature-icon">{f.icon}</div>
                     <div className="feature-name">{f.name}</div>
                     <div className="feature-desc">{f.desc}</div>
@@ -250,18 +288,14 @@ export default function App() {
             messages.map(msg => <Message key={msg.id} msg={msg} />)
           )}
 
+          {/* Live status — shown while loading */}
           {loading && (
-            <div className="message-wrap assistant" style={{ animation: 'fadeSlideIn 0.3s ease' }}>
+            <div className="message-wrap assistant" style={{ animation: 'fadeSlideIn 0.2s ease' }}>
               <div className="message-meta">
                 <span style={{ color: 'var(--accent-bright)', fontWeight: 600, fontSize: '12px' }}>🤖 DB Agent</span>
               </div>
-              <div className="thinking-bubble">
-                <div className="thinking-dots">
-                  <div className="thinking-dot"></div>
-                  <div className="thinking-dot"></div>
-                  <div className="thinking-dot"></div>
-                </div>
-                <span>Thinking…</span>
+              <div style={{ maxWidth: '78%' }}>
+                <StatusBar stage={status.stage} message={status.message} />
               </div>
             </div>
           )}
@@ -269,7 +303,6 @@ export default function App() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input */}
         <div className="input-area">
           <div className="input-wrap">
             <textarea
@@ -286,13 +319,13 @@ export default function App() {
               rows={1}
               disabled={loading}
             />
-            <button className="send-btn" onClick={() => handleSend()} disabled={!input.trim() || loading} title="Send">
+            <button className="send-btn" onClick={() => handleSend()} disabled={!input.trim() || loading} title="Send (Enter)">
               ↑
             </button>
           </div>
           <div className="input-hints">
             {HINTS.map(h => (
-              <button key={h} className="hint-chip" onClick={() => handleSend(h)}>{h}</button>
+              <button key={h} className="hint-chip" onClick={() => handleSend(h)} disabled={loading}>{h}</button>
             ))}
           </div>
         </div>
