@@ -1,17 +1,8 @@
-import dns.resolver
-
-# DNS patch FIRST
-# resolver = dns.resolver.Resolver(configure=False)
-# resolver.nameservers = ['1.1.1.1', '8.8.8.8']
-# dns.resolver.default_resolver = resolver
-
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import json
-import uuid
-import asyncio
 
 from config import settings
 from agent import invoke_agent, clear_memory, get_schema_str, _sessions
@@ -20,15 +11,13 @@ app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://querymind-db-agent.vercel.app"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-
-# ── Models ────────────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     message: str
     session_id: str
@@ -49,7 +38,6 @@ class ChatResponse(BaseModel):
     visualization_config: Optional[Dict[str, Any]] = None
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
     return {"status": "ok", "app": settings.APP_NAME, "provider": settings.LLM_PROVIDER,
@@ -65,7 +53,8 @@ async def health():
         db_ok = "unavailable" not in schema
     except Exception as e:
         db_error = str(e)
-    return {"status": "ok", "db_connected": db_ok, "db_error": db_error}
+    return {"status": "ok", "db_connected": db_ok, "db_error": db_error,
+            "model": settings.LLM_MODEL, "provider": settings.LLM_PROVIDER, "db_type": settings.DB_TYPE}
 
 
 @app.get("/schema")
@@ -78,20 +67,12 @@ async def chat(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(400, "Message cannot be empty")
     result = await invoke_agent(req.message, req.session_id)
-    return ChatResponse(
-        session_id=req.session_id,
-        intent=result.intent,
-        message=result.message,
-        query=result.query,
-        query_explanation=result.query_explanation,
-        is_read_only=result.is_read_only,
-        rows=result.rows,
-        columns=result.columns,
-        row_count=result.row_count,
-        error=result.error,
-        suggest_visualization=result.suggest_visualization,
-        visualization_config=result.visualization_config,
-    )
+    return ChatResponse(session_id=req.session_id, intent=result.intent, message=result.message,
+                        query=result.query, query_explanation=result.query_explanation,
+                        is_read_only=result.is_read_only, rows=result.rows, columns=result.columns,
+                        row_count=result.row_count, error=result.error,
+                        suggest_visualization=result.suggest_visualization,
+                        visualization_config=result.visualization_config)
 
 
 @app.delete("/session/{session_id}")
@@ -105,20 +86,31 @@ async def list_sessions():
     return {"active_sessions": list(_sessions.keys())}
 
 
-# ── WebSocket for streaming ───────────────────────────────────────────────────
+# ── WebSocket — primary channel with live status updates ──────────────────────
 @app.websocket("/ws/{session_id}")
 async def websocket_chat(websocket: WebSocket, session_id: str):
     await websocket.accept()
+
+    async def send(payload: dict):
+        try:
+            await websocket.send_json(payload)
+        except Exception:
+            pass
+
+    async def status_cb(stage: str, message: str):
+        await send({"type": "status", "stage": stage, "message": message})
+
     try:
         while True:
             data = await websocket.receive_text()
             payload = json.loads(data)
-            message = payload.get("message", "")
-            if not message:
+            user_message = payload.get("message", "").strip()
+            if not user_message:
                 continue
-            await websocket.send_json({"type": "thinking", "content": "..."})
-            result = await invoke_agent(message, session_id)
-            await websocket.send_json({
+
+            result = await invoke_agent(user_message, session_id, status_cb=status_cb)
+
+            await send({
                 "type": "response",
                 "intent": result.intent,
                 "message": result.message,
@@ -132,8 +124,11 @@ async def websocket_chat(websocket: WebSocket, session_id: str):
                 "suggest_visualization": result.suggest_visualization,
                 "visualization_config": result.visualization_config,
             })
+
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        await send({"type": "error", "message": str(e)})
 
 
 if __name__ == "__main__":
