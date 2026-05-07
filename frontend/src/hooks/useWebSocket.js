@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 
-const WS_BASE = (process.env.REACT_APP_API_URL || 'http://localhost:8000')
+const WS_BASE = (process.env.REACT_APP_API_URL || 'https://ai-db-agent-uuwa.onrender.com')
   .replace(/^http/, 'ws');
 
 export default function useWebSocket(sessionId, { onStatus, onResponse, onError }) {
