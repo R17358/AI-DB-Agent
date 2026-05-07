@@ -728,6 +728,53 @@ tbody td.redacted { color: var(--red); font-size: 11px; }
   .msg-bubble { max-width: 95%; }
 }
 
+/* ── Live status bar ─────────────────────────────────────────── */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  color: var(--text-secondary);
+  animation: fadeSlideIn 0.2s ease;
+  margin-bottom: 4px;
+}
+
+.status-bar.error {
+  background: rgba(248,113,113,0.08);
+  border-color: rgba(248,113,113,0.3);
+  color: var(--red);
+}
+
+.status-stage-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.status-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.status-text { flex: 1; }
+
+.status-elapsed {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 /* ── Animated gradient border ────────────────────────────────── */
 .gradient-border {
   position: relative;
