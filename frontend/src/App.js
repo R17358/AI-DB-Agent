@@ -42,7 +42,7 @@ export default function App() {
   const [showSchema, setShowSchema] = useState(false);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
-  const pendingMessageRef = useRef(null);
+
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
