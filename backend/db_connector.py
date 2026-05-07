@@ -56,7 +56,6 @@ class SQLConnector:
 class MongoConnector:
     def __init__(self):
         from pymongo import MongoClient
-        print(settings.MONGO_URI)
         self.client = MongoClient(settings.MONGO_URI)
         self.db = self.client[settings.MONGO_DB_NAME]
 
