@@ -1,7 +1,7 @@
-import dns.resolver 
-resolver = dns.resolver.Resolver(configure=False) 
-resolver.nameservers = ['1.1.1.1', '8.8.8.8']
-dns.resolver.default_resolver = resolver
+# import dns.resolver 
+# resolver = dns.resolver.Resolver(configure=False) 
+# resolver.nameservers = ['1.1.1.1', '8.8.8.8']
+# dns.resolver.default_resolver = resolver
 
 
 
