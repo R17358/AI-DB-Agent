@@ -47,9 +47,9 @@ def clear_memory(session_id: str):
 # ── Schema loader ────────────────────────────────────────────────────────────
 _schema_cache: Optional[str] = None
 
-def get_schema_str() -> str:
+def get_schema_str(force_refresh: bool = False) -> str:
     global _schema_cache
-    if _schema_cache:
+    if _schema_cache and not force_refresh:
         return _schema_cache
     try:
         connector = get_connector()
@@ -201,6 +201,7 @@ async def invoke_agent(
 
         await emit("querying", "Generating query…")
         try:
+            print(json_str)
             parsed = json.loads(json_str)
         except json.JSONDecodeError as e:
             response.message = raw_text.replace(db_block_match.group(0), "").strip()

@@ -2,16 +2,15 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import Message from './components/Message';
 import StatusBar from './components/StatusBar';
-import useWebSocket from './hooks/useWebSocket';
-import { clearSession, getHealth, getSchema, sendChat } from './utils/api';
+import { streamChat, clearSession, getHealth, getSchema } from './utils/api';
 
 const HINTS = [
-  "Show me all tables",
-  "Count total records",
-  "Top 10 by revenue",
-  "Show recent entries",
-  "Summarize the data",
-  "Compare categories",
+  'Show me all tables',
+  'Count total records',
+  'Top 10 by revenue',
+  'Show recent entries',
+  'Summarize the data',
+  'Compare categories',
 ];
 
 const FEATURES = [
@@ -42,7 +41,7 @@ export default function App() {
   const [showSchema, setShowSchema] = useState(false);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
-
+  const cancelStreamRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -61,121 +60,112 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    getSchema().then(d => setSchema(d.schema || ''));
+    getSchema().then((d) => setSchema(d.schema || ''));
   }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading, status]);
 
-  // ── WebSocket callbacks ────────────────────────────────────────
-  const handleStatus = useCallback((stage, message) => {
-    setStatus({ stage, message });
-    if (stage === 'done' || stage === 'error') {
-      setTimeout(() => setStatus({ stage: null, message: '' }), stage === 'error' ? 4000 : 800);
-    }
-  }, []);
+  const handleSend = useCallback(
+    (text) => {
+      const msg = (text || input).trim();
+      if (!msg || loading) return;
+      setInput('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
-  const handleResponse = useCallback((data) => {
-    setLoading(false);
-    setStatus({ stage: null, message: '' });
-    const aiMsg = {
-      id: uuidv4(),
-      role: 'assistant',
-      content: data.message,
-      intent: data.intent,
-      query: data.query,
-      query_explanation: data.query_explanation,
-      is_read_only: data.is_read_only,
-      rows: data.rows,
-      columns: data.columns,
-      row_count: data.row_count,
-      error: data.error,
-      suggest_visualization: data.suggest_visualization,
-      visualization_config: data.visualization_config,
-      time: formatTime(),
-    };
-    setMessages(prev => [...prev, aiMsg]);
-  }, []);
+      setMessages((prev) => [
+        ...prev,
+        { id: uuidv4(), role: 'user', content: msg, time: formatTime() },
+      ]);
+      setLoading(true);
+      setStatus({ stage: 'thinking', message: 'Thinking…' });
 
-  const handleWsError = useCallback((msg) => {
-    setLoading(false);
-    setStatus({ stage: null, message: '' });
-    setMessages(prev => [...prev, {
-      id: uuidv4(), role: 'assistant', content: null, intent: 'chat',
-      error: `Connection error: ${msg}`, time: formatTime(),
-    }]);
-  }, []);
+      // Cancel any previous stream
+      if (cancelStreamRef.current) cancelStreamRef.current();
 
-  const { send, connected } = useWebSocket(sessionId, {
-    onStatus: handleStatus,
-    onResponse: handleResponse,
-    onError: handleWsError,
-  });
-
-  // ── Send message ───────────────────────────────────────────────
-  const handleSend = useCallback(async (text) => {
-    const msg = (text || input).trim();
-    if (!msg || loading) return;
-    setInput('');
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
-
-    const userMsg = { id: uuidv4(), role: 'user', content: msg, time: formatTime() };
-    setMessages(prev => [...prev, userMsg]);
-    setLoading(true);
-    setStatus({ stage: 'thinking', message: 'Thinking…' });
-
-    // Try WebSocket first, fall back to REST
-    const sent = send(msg);
-    if (!sent) {
-      // WebSocket not ready — use REST and show error details
-      try {
-        const res = await sendChat(msg, sessionId);
-        handleResponse(res);
-      } catch (e) {
-        setLoading(false);
-        setStatus({ stage: null, message: '' });
-
-        // Parse friendly error from fetch failure
-        let errMsg = e.message || 'Unknown error';
-        if (errMsg.includes('Failed to fetch') || errMsg.includes('NetworkError')) {
-          errMsg = '🌐 Cannot reach backend. Make sure the Python server is running on port 8000.';
-        }
-        setMessages(prev => [...prev, {
-          id: uuidv4(), role: 'assistant', content: null, intent: 'chat',
-          error: errMsg, time: formatTime(),
-        }]);
-      }
-    }
-  }, [input, loading, send, sessionId, handleResponse]);
+      cancelStreamRef.current = streamChat(msg, sessionId, {
+        onStatus: (stage, message) => {
+          setStatus({ stage, message });
+          if (stage === 'done' || stage === 'error') {
+            setTimeout(
+              () => setStatus({ stage: null, message: '' }),
+              stage === 'error' ? 4000 : 800
+            );
+          }
+        },
+        onResponse: (data) => {
+          setLoading(false);
+          setStatus({ stage: null, message: '' });
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: uuidv4(),
+              role: 'assistant',
+              content: data.message,
+              intent: data.intent,
+              query: data.query,
+              query_explanation: data.query_explanation,
+              is_read_only: data.is_read_only,
+              rows: data.rows,
+              columns: data.columns,
+              row_count: data.row_count,
+              error: data.error,
+              suggest_visualization: data.suggest_visualization,
+              visualization_config: data.visualization_config,
+              time: formatTime(),
+            },
+          ]);
+        },
+        onError: (errMsg) => {
+          setLoading(false);
+          setStatus({ stage: null, message: '' });
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: uuidv4(),
+              role: 'assistant',
+              content: null,
+              intent: 'chat',
+              error: errMsg,
+              time: formatTime(),
+            },
+          ]);
+        },
+      });
+    },
+    [input, loading, sessionId]
+  );
 
   const handleKey = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
   };
 
   const handleNewChat = async () => {
+    if (cancelStreamRef.current) cancelStreamRef.current();
     await clearSession(sessionId);
     setMessages([]);
+    setLoading(false);
     setStatus({ stage: null, message: '' });
   };
 
   const parseSchemaForDisplay = () => {
-    const lines = schema.split('\n');
-    return lines
-      .filter(l => l.match(/^\s{2}\w/))
-      .map(l => {
+    return schema
+      .split('\n')
+      .filter((l) => l.match(/^\s{2}\w/))
+      .map((l) => {
         const parts = l.trim().split(':');
         return parts.length >= 2
-          ? { name: parts[0].trim(), cols: parts[1].split(',').map(c => c.trim()) }
+          ? { name: parts[0].trim(), cols: parts[1].split(',').map((c) => c.trim()) }
           : null;
       })
       .filter(Boolean);
   };
 
   const schemaItems = parseSchemaForDisplay();
-  const wsStatus = connected ? 'connected' : dbConnected === 'connecting' ? 'connecting' : 'disconnected';
 
   return (
     <div className="app-layout">
@@ -202,23 +192,43 @@ export default function App() {
 
           {schema && (
             <>
-              <div className="sidebar-section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: '18px' }}>
+              <div
+                className="sidebar-section-title"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  paddingRight: '18px',
+                }}
+              >
                 <span>Schema</span>
-                <button onClick={() => setShowSchema(s => !s)}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px' }}>
+                <button
+                  onClick={() => setShowSchema((s) => !s)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                  }}
+                >
                   {showSchema ? 'Hide' : 'Show'}
                 </button>
               </div>
               {showSchema && (
                 <div className="schema-panel">
-                  {schemaItems.map(t => (
+                  {schemaItems.map((t) => (
                     <div key={t.name} className="schema-table">
                       <div className="schema-table-name">{t.name}</div>
                       <div className="schema-cols">
-                        {t.cols.slice(0, 8).map(c => (
-                          <span key={c} className="schema-col-tag">{c}</span>
+                        {t.cols.slice(0, 8).map((c) => (
+                          <span key={c} className="schema-col-tag">
+                            {c}
+                          </span>
                         ))}
-                        {t.cols.length > 8 && <span className="schema-col-tag">+{t.cols.length - 8}</span>}
+                        {t.cols.length > 8 && (
+                          <span className="schema-col-tag">+{t.cols.length - 8}</span>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -228,21 +238,29 @@ export default function App() {
           )}
 
           <div className="sidebar-footer">
-            {/* DB status */}
-            <div className="db-status" style={{ marginBottom: '6px' }}>
-              <span className={`status-dot ${dbConnected}`}></span>
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {dbConnected === 'connected' ? `DB · ${dbType || 'Connected'}` :
-                 dbConnected === 'connecting' ? 'Connecting to DB…' : 'DB Disconnected'}
-              </span>
-            </div>
-            {/* WS status */}
             <div className="db-status">
-              <span className={`status-dot ${wsStatus}`}></span>
-              <span style={{ flex: 1 }}>
-                {connected ? `Live · ${model || 'AI Ready'}` : 'Reconnecting…'}
+              <span className={`status-dot ${dbConnected}`}></span>
+              <span
+                style={{
+                  flex: 1,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {dbConnected === 'connected'
+                  ? `DB · ${dbType || 'Connected'}`
+                  : dbConnected === 'connecting'
+                  ? 'Connecting to DB…'
+                  : 'DB Disconnected'}
               </span>
             </div>
+            {model && (
+              <div className="db-status" style={{ marginTop: '6px' }}>
+                <span className="status-dot connected"></span>
+                <span>{model}</span>
+              </div>
+            )}
           </div>
         </aside>
       )}
@@ -251,15 +269,27 @@ export default function App() {
       <div className="main-area">
         <header className="main-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <button className="icon-btn" onClick={() => setSidebarOpen(s => !s)} title="Toggle sidebar">☰</button>
+            <button
+              className="icon-btn"
+              onClick={() => setSidebarOpen((s) => !s)}
+              title="Toggle sidebar"
+            >
+              ☰
+            </button>
             <div>
               <div className="header-title">DB AI Agent</div>
               {model && <div className="header-meta">{model}</div>}
             </div>
           </div>
           <div className="header-actions">
-            <button className="icon-btn" onClick={handleNewChat} title="Clear chat">🗑</button>
-            <button className="icon-btn" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} title="Toggle theme">
+            <button className="icon-btn" onClick={handleNewChat} title="Clear chat">
+              🗑
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+              title="Toggle theme"
+            >
               {theme === 'dark' ? '☀️' : '🌙'}
             </button>
           </div>
@@ -271,12 +301,19 @@ export default function App() {
               <div className="welcome-icon">⚡</div>
               <div className="welcome-title">Your DB AI Agent</div>
               <div className="welcome-sub">
-                Ask anything in plain English — I'll generate the query, run it, visualize results, and explain everything.
+                Ask anything in plain English — I'll generate the query, run it, visualize
+                results, and explain everything.
               </div>
               <div className="welcome-features">
-                {FEATURES.map(f => (
-                  <div key={f.name} className="feature-card"
-                    onClick={() => f.name === 'Smart Queries' && handleSend('What tables do you have access to?')}>
+                {FEATURES.map((f) => (
+                  <div
+                    key={f.name}
+                    className="feature-card"
+                    onClick={() =>
+                      f.name === 'Smart Queries' &&
+                      handleSend('What tables do you have access to?')
+                    }
+                  >
                     <div className="feature-icon">{f.icon}</div>
                     <div className="feature-name">{f.name}</div>
                     <div className="feature-desc">{f.desc}</div>
@@ -285,14 +322,16 @@ export default function App() {
               </div>
             </div>
           ) : (
-            messages.map(msg => <Message key={msg.id} msg={msg} />)
+            messages.map((msg) => <Message key={msg.id} msg={msg} />)
           )}
 
-          {/* Live status — shown while loading */}
+          {/* Live status while loading */}
           {loading && (
             <div className="message-wrap assistant" style={{ animation: 'fadeSlideIn 0.2s ease' }}>
               <div className="message-meta">
-                <span style={{ color: 'var(--accent-bright)', fontWeight: 600, fontSize: '12px' }}>🤖 DB Agent</span>
+                <span style={{ color: 'var(--accent-bright)', fontWeight: 600, fontSize: '12px' }}>
+                  🤖 DB Agent
+                </span>
               </div>
               <div style={{ maxWidth: '78%' }}>
                 <StatusBar stage={status.stage} message={status.message} />
@@ -303,6 +342,7 @@ export default function App() {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Input */}
         <div className="input-area">
           <div className="input-wrap">
             <textarea
@@ -310,7 +350,7 @@ export default function App() {
               className="chat-input"
               placeholder="Ask anything about your data, or just chat…"
               value={input}
-              onChange={e => {
+              onChange={(e) => {
                 setInput(e.target.value);
                 e.target.style.height = 'auto';
                 e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px';
@@ -319,13 +359,25 @@ export default function App() {
               rows={1}
               disabled={loading}
             />
-            <button className="send-btn" onClick={() => handleSend()} disabled={!input.trim() || loading} title="Send (Enter)">
+            <button
+              className="send-btn"
+              onClick={() => handleSend()}
+              disabled={!input.trim() || loading}
+              title="Send (Enter)"
+            >
               ↑
             </button>
           </div>
           <div className="input-hints">
-            {HINTS.map(h => (
-              <button key={h} className="hint-chip" onClick={() => handleSend(h)} disabled={loading}>{h}</button>
+            {HINTS.map((h) => (
+              <button
+                key={h}
+                className="hint-chip"
+                onClick={() => handleSend(h)}
+                disabled={loading}
+              >
+                {h}
+              </button>
             ))}
           </div>
         </div>

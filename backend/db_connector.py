@@ -1,3 +1,10 @@
+import dns.resolver 
+resolver = dns.resolver.Resolver(configure=False) 
+resolver.nameservers = ['1.1.1.1', '8.8.8.8']
+dns.resolver.default_resolver = resolver
+
+
+
 from typing import Any, Dict, List, Optional, Tuple
 from config import settings
 import re
@@ -11,13 +18,14 @@ class SQLConnector:
         self.inspect = inspect
 
     def get_schema(self) -> Dict[str, Any]:
-        inspector = self.inspect(self.engine)
         schema = {}
-        for table in inspector.get_table_names():
-            cols = inspector.get_columns(table)
-            schema[table] = [
-                {"name": c["name"], "type": str(c["type"])} for c in cols
-            ]
+        for coll_name in self.db.list_collection_names():
+            # Multiple docs sample karo taaki saare fields mile
+            fields = set()
+            for doc in self.db[coll_name].find().limit(20):
+                fields.update(doc.keys())
+            fields.discard('_id')
+            schema[coll_name] = sorted(list(fields))
         return schema
 
     def is_read_only(self, query: str) -> bool:
@@ -56,6 +64,7 @@ class SQLConnector:
 class MongoConnector:
     def __init__(self):
         from pymongo import MongoClient
+        print(settings.MONGO_URI)
         self.client = MongoClient(settings.MONGO_URI)
         self.db = self.client[settings.MONGO_DB_NAME]
 
@@ -83,7 +92,7 @@ class MongoConnector:
         coll_name = query.get("collection")
         operation = query.get("operation", "find")
         coll = self.db[coll_name]
-        limit = min(query.get("limit", settings.MAX_ROWS), settings.MAX_ROWS)
+        limit = min(query.get("limit") or settings.MAX_ROWS, settings.MAX_ROWS)
 
         if operation == "find":
             cursor = coll.find(
