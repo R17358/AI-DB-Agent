@@ -1,5 +1,7 @@
 # ⚡ DB AI Agent
 
+live:  https://querymind-db-agent.vercel.app
+
 A full-stack AI-powered database agent that lets you query **any SQL or MongoDB database** using natural language. Built with React, Python FastAPI, and LangChain.
 
 ---
