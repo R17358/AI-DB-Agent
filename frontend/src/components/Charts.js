@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
 import {
-  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
-  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
-  Legend, ResponsiveContainer, Area, AreaChart, RadarChart,
-  Radar, PolarGrid, PolarAngleAxis
+  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip,
+  Legend, ResponsiveContainer, Area, AreaCharts
 } from 'recharts';
 
 const COLORS = [
