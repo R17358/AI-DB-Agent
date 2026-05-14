@@ -15,18 +15,29 @@ const HINTS = [
 
 const FEATURES = [
   { icon: '🔍', name: 'Smart Queries', desc: 'Generates SQL or MongoDB queries from natural language.' },
-  { icon: '📊', name: 'Live Viz', desc: 'Charts results with bar, line, pie, area charts and more.' },
-  { icon: '🧠', name: 'Memory', desc: 'Remembers context across your session.' },
+  { icon: '📊', name: 'Live Viz',      desc: 'Charts results with bar, line, pie, area charts and more.' },
+  { icon: '🧠', name: 'Memory',        desc: 'Remembers context across your session.' },
   { icon: '🔒', name: 'Privacy Guard', desc: 'Sensitive columns are always masked.' },
-  { icon: '💬', name: 'Dual Mode', desc: 'Knows when to query the DB vs just chat.' },
-  { icon: '⚡', name: 'Any DB', desc: 'PostgreSQL, MySQL, SQLite, MongoDB via .env.' },
+  { icon: '💬', name: 'Dual Mode',     desc: 'Knows when to query the DB vs just chat.' },
+  { icon: '⚡', name: 'Any DB',        desc: 'PostgreSQL, MySQL, SQLite, MongoDB via .env.' },
 ];
 
 function formatTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() => window.innerWidth <= 640);
+  useEffect(() => {
+    const fn = () => setMobile(window.innerWidth <= 640);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+  return mobile;
+}
+
 export default function App() {
+  const isMobile = useIsMobile();
   const [theme, setTheme] = useState('dark');
   const [sessionId] = useState(() => uuidv4());
   const [messages, setMessages] = useState([]);
@@ -37,11 +48,18 @@ export default function App() {
   const [dbType, setDbType] = useState('');
   const [model, setModel] = useState('');
   const [schema, setSchema] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Desktop: sidebar always visible; Mobile: starts closed
+  const [sidebarOpen, setSidebarOpen] = useState(!isMobile);
   const [showSchema, setShowSchema] = useState(false);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const cancelStreamRef = useRef(null);
+
+  // Close sidebar when switching to mobile
+  useEffect(() => {
+    if (isMobile) setSidebarOpen(false);
+    else setSidebarOpen(true);
+  }, [isMobile]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -51,7 +69,7 @@ export default function App() {
     const check = async () => {
       const h = await getHealth();
       setDbConnected(h.db_connected ? 'connected' : 'disconnected');
-      if (h.model) setModel(h.model);
+      if (h.model)   setModel(h.model);
       if (h.db_type) setDbType(h.db_type);
     };
     check();
@@ -67,81 +85,58 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading, status]);
 
-  const handleSend = useCallback(
-    (text) => {
-      const msg = (text || input).trim();
-      if (!msg || loading) return;
-      setInput('');
-      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+  const closeSidebarOnMobile = () => { if (isMobile) setSidebarOpen(false); };
 
-      setMessages((prev) => [
-        ...prev,
-        { id: uuidv4(), role: 'user', content: msg, time: formatTime() },
-      ]);
-      setLoading(true);
-      setStatus({ stage: 'thinking', message: 'Thinking…' });
+  const handleSend = useCallback((text) => {
+    const msg = (text || input).trim();
+    if (!msg || loading) return;
+    setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    closeSidebarOnMobile();
 
-      // Cancel any previous stream
-      if (cancelStreamRef.current) cancelStreamRef.current();
+    setMessages((prev) => [...prev,
+      { id: uuidv4(), role: 'user', content: msg, time: formatTime() },
+    ]);
+    setLoading(true);
+    setStatus({ stage: 'thinking', message: 'Thinking…' });
 
-      cancelStreamRef.current = streamChat(msg, sessionId, {
-        onStatus: (stage, message) => {
-          setStatus({ stage, message });
-          if (stage === 'done' || stage === 'error') {
-            setTimeout(
-              () => setStatus({ stage: null, message: '' }),
-              stage === 'error' ? 4000 : 800
-            );
-          }
-        },
-        onResponse: (data) => {
-          setLoading(false);
-          setStatus({ stage: null, message: '' });
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: uuidv4(),
-              role: 'assistant',
-              content: data.message,
-              intent: data.intent,
-              query: data.query,
-              query_explanation: data.query_explanation,
-              is_read_only: data.is_read_only,
-              rows: data.rows,
-              columns: data.columns,
-              row_count: data.row_count,
-              error: data.error,
-              suggest_visualization: data.suggest_visualization,
-              visualization_config: data.visualization_config,
-              time: formatTime(),
-            },
-          ]);
-        },
-        onError: (errMsg) => {
-          setLoading(false);
-          setStatus({ stage: null, message: '' });
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: uuidv4(),
-              role: 'assistant',
-              content: null,
-              intent: 'chat',
-              error: errMsg,
-              time: formatTime(),
-            },
-          ]);
-        },
-      });
-    },
-    [input, loading, sessionId]
-  );
+    if (cancelStreamRef.current) cancelStreamRef.current();
+
+    cancelStreamRef.current = streamChat(msg, sessionId, {
+      onStatus: (stage, message) => {
+        setStatus({ stage, message });
+        if (stage === 'done' || stage === 'error') {
+          setTimeout(() => setStatus({ stage: null, message: '' }), stage === 'error' ? 4000 : 800);
+        }
+      },
+      onResponse: (data) => {
+        setLoading(false);
+        setStatus({ stage: null, message: '' });
+        setMessages((prev) => [...prev, {
+          id: uuidv4(), role: 'assistant',
+          content: data.message,      intent: data.intent,
+          query: data.query,          query_explanation: data.query_explanation,
+          is_read_only: data.is_read_only,
+          rows: data.rows,            columns: data.columns,
+          row_count: data.row_count,  error: data.error,
+          suggest_visualization: data.suggest_visualization,
+          visualization_config: data.visualization_config,
+          time: formatTime(),
+        }]);
+      },
+      onError: (errMsg) => {
+        setLoading(false);
+        setStatus({ stage: null, message: '' });
+        setMessages((prev) => [...prev, {
+          id: uuidv4(), role: 'assistant', content: null,
+          intent: 'chat', error: errMsg, time: formatTime(),
+        }]);
+      },
+    });
+  }, [input, loading, sessionId]); // eslint-disable-line
 
   const handleKey = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
   const handleNewChat = async () => {
@@ -150,11 +145,11 @@ export default function App() {
     setMessages([]);
     setLoading(false);
     setStatus({ stage: null, message: '' });
+    closeSidebarOnMobile();
   };
 
-  const parseSchemaForDisplay = () => {
-    return schema
-      .split('\n')
+  const parseSchemaForDisplay = () =>
+    schema.split('\n')
       .filter((l) => l.match(/^\s{2}\w/))
       .map((l) => {
         const parts = l.trim().split(':');
@@ -163,133 +158,88 @@ export default function App() {
           : null;
       })
       .filter(Boolean);
-  };
 
   const schemaItems = parseSchemaForDisplay();
 
   return (
     <div className="app-layout">
+      {/* Mobile overlay — tap to close sidebar */}
+      {isMobile && sidebarOpen && (
+        <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />
+      )}
+
       {/* Sidebar */}
-      {sidebarOpen && (
-        <aside className="sidebar">
-          <div className="sidebar-header">
-            <div className="sidebar-logo">
-              <div className="logo-icon">⚡</div>
-              <span>DB AI Agent</span>
-            </div>
-            <button className="new-chat-btn" onClick={handleNewChat}>
-              <span>+</span> New Chat
+      <aside className={`sidebar ${isMobile && sidebarOpen ? 'mobile-open' : ''}`}
+             style={!isMobile && !sidebarOpen ? { display: 'none' } : {}}>
+        <div className="sidebar-header">
+          <div className="sidebar-logo">
+            <div className="logo-icon">⚡</div>
+            <span>DB AI Agent</span>
+          </div>
+          <button className="new-chat-btn" onClick={handleNewChat}>
+            <span>+</span> New Chat
+          </button>
+        </div>
+
+        <div className="sidebar-section-title">Session</div>
+        <div className="history-list">
+          <div className="history-item active"><span>💬</span><span>Current session</span></div>
+        </div>
+
+        {schema && (<>
+          <div className="sidebar-section-title"
+               style={{ display:'flex', alignItems:'center', justifyContent:'space-between', paddingRight:'18px' }}>
+            <span>Schema</span>
+            <button onClick={() => setShowSchema((s) => !s)}
+              style={{ background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', fontSize:'11px' }}>
+              {showSchema ? 'Hide' : 'Show'}
             </button>
           </div>
-
-          <div className="sidebar-section-title">Session</div>
-          <div className="history-list">
-            <div className="history-item active">
-              <span>💬</span>
-              <span>Current session</span>
-            </div>
-          </div>
-
-          {schema && (
-            <>
-              <div
-                className="sidebar-section-title"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  paddingRight: '18px',
-                }}
-              >
-                <span>Schema</span>
-                <button
-                  onClick={() => setShowSchema((s) => !s)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--text-muted)',
-                    cursor: 'pointer',
-                    fontSize: '11px',
-                  }}
-                >
-                  {showSchema ? 'Hide' : 'Show'}
-                </button>
-              </div>
-              {showSchema && (
-                <div className="schema-panel">
-                  {schemaItems.map((t) => (
-                    <div key={t.name} className="schema-table">
-                      <div className="schema-table-name">{t.name}</div>
-                      <div className="schema-cols">
-                        {t.cols.slice(0, 8).map((c) => (
-                          <span key={c} className="schema-col-tag">
-                            {c}
-                          </span>
-                        ))}
-                        {t.cols.length > 8 && (
-                          <span className="schema-col-tag">+{t.cols.length - 8}</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+          {showSchema && (
+            <div className="schema-panel">
+              {schemaItems.map((t) => (
+                <div key={t.name} className="schema-table">
+                  <div className="schema-table-name">{t.name}</div>
+                  <div className="schema-cols">
+                    {t.cols.slice(0, 8).map((c) => <span key={c} className="schema-col-tag">{c}</span>)}
+                    {t.cols.length > 8 && <span className="schema-col-tag">+{t.cols.length - 8}</span>}
+                  </div>
                 </div>
-              )}
-            </>
-          )}
-
-          <div className="sidebar-footer">
-            <div className="db-status">
-              <span className={`status-dot ${dbConnected}`}></span>
-              <span
-                style={{
-                  flex: 1,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {dbConnected === 'connected'
-                  ? `DB · ${dbType || 'Connected'}`
-                  : dbConnected === 'connecting'
-                  ? 'Connecting to DB…'
-                  : 'DB Disconnected'}
-              </span>
+              ))}
             </div>
-            {model && (
-              <div className="db-status" style={{ marginTop: '6px' }}>
-                <span className="status-dot connected"></span>
-                <span>{model}</span>
-              </div>
-            )}
+          )}
+        </>)}
+
+        <div className="sidebar-footer">
+          <div className="db-status">
+            <span className={`status-dot ${dbConnected}`}></span>
+            <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+              {dbConnected === 'connected' ? `DB · ${dbType || 'Connected'}` :
+               dbConnected === 'connecting' ? 'Connecting…' : 'DB Disconnected'}
+            </span>
           </div>
-        </aside>
-      )}
+          {model && (
+            <div className="db-status" style={{ marginTop:'6px' }}>
+              <span className="status-dot connected"></span>
+              <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{model}</span>
+            </div>
+          )}
+        </div>
+      </aside>
 
       {/* Main */}
       <div className="main-area">
         <header className="main-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <button
-              className="icon-btn"
-              onClick={() => setSidebarOpen((s) => !s)}
-              title="Toggle sidebar"
-            >
-              ☰
-            </button>
+          <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+            <button className="icon-btn" onClick={() => setSidebarOpen((s) => !s)} title="Toggle sidebar">☰</button>
             <div>
               <div className="header-title">DB AI Agent</div>
-              {model && <div className="header-meta">{model}</div>}
+              {model && !isMobile && <div className="header-meta">{model}</div>}
             </div>
           </div>
           <div className="header-actions">
-            <button className="icon-btn" onClick={handleNewChat} title="Clear chat">
-              🗑
-            </button>
-            <button
-              className="icon-btn"
-              onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-              title="Toggle theme"
-            >
+            <button className="icon-btn" onClick={handleNewChat} title="Clear chat">🗑</button>
+            <button className="icon-btn" onClick={() => setTheme((t) => t === 'dark' ? 'light' : 'dark')} title="Toggle theme">
               {theme === 'dark' ? '☀️' : '🌙'}
             </button>
           </div>
@@ -301,19 +251,12 @@ export default function App() {
               <div className="welcome-icon">⚡</div>
               <div className="welcome-title">Your DB AI Agent</div>
               <div className="welcome-sub">
-                Ask anything in plain English — I'll generate the query, run it, visualize
-                results, and explain everything.
+                Ask anything in plain English — I'll generate the query, run it, visualize results, and explain everything.
               </div>
               <div className="welcome-features">
                 {FEATURES.map((f) => (
-                  <div
-                    key={f.name}
-                    className="feature-card"
-                    onClick={() =>
-                      f.name === 'Smart Queries' &&
-                      handleSend('What tables do you have access to?')
-                    }
-                  >
+                  <div key={f.name} className="feature-card"
+                    onClick={() => f.name === 'Smart Queries' && handleSend('What tables do you have access to?')}>
                     <div className="feature-icon">{f.icon}</div>
                     <div className="feature-name">{f.name}</div>
                     <div className="feature-desc">{f.desc}</div>
@@ -325,30 +268,25 @@ export default function App() {
             messages.map((msg) => <Message key={msg.id} msg={msg} />)
           )}
 
-          {/* Live status while loading */}
           {loading && (
-            <div className="message-wrap assistant" style={{ animation: 'fadeSlideIn 0.2s ease' }}>
+            <div className="message-wrap assistant" style={{ animation:'fadeSlideIn 0.2s ease' }}>
               <div className="message-meta">
-                <span style={{ color: 'var(--accent-bright)', fontWeight: 600, fontSize: '12px' }}>
-                  🤖 DB Agent
-                </span>
+                <span style={{ color:'var(--accent-bright)', fontWeight:600, fontSize:'12px' }}>🤖 DB Agent</span>
               </div>
-              <div style={{ maxWidth: '78%' }}>
+              <div style={{ maxWidth:'78%' }}>
                 <StatusBar stage={status.stage} message={status.message} />
               </div>
             </div>
           )}
-
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input */}
         <div className="input-area">
           <div className="input-wrap">
             <textarea
               ref={textareaRef}
               className="chat-input"
-              placeholder="Ask anything about your data, or just chat…"
+              placeholder="Ask anything about your data…"
               value={input}
               onChange={(e) => {
                 setInput(e.target.value);
@@ -359,25 +297,11 @@ export default function App() {
               rows={1}
               disabled={loading}
             />
-            <button
-              className="send-btn"
-              onClick={() => handleSend()}
-              disabled={!input.trim() || loading}
-              title="Send (Enter)"
-            >
-              ↑
-            </button>
+            <button className="send-btn" onClick={() => handleSend()} disabled={!input.trim() || loading} title="Send">↑</button>
           </div>
           <div className="input-hints">
             {HINTS.map((h) => (
-              <button
-                key={h}
-                className="hint-chip"
-                onClick={() => handleSend(h)}
-                disabled={loading}
-              >
-                {h}
-              </button>
+              <button key={h} className="hint-chip" onClick={() => handleSend(h)} disabled={loading}>{h}</button>
             ))}
           </div>
         </div>

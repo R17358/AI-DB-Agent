@@ -1,4 +1,4 @@
-const BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const BASE = process.env.REACT_APP_API_URL || 'https://ai-db-agent-1.onrender.com';
 
 // ── SSE streaming chat (primary) ──────────────────────────────────────────────
 export function streamChat(message, sessionId, { onStatus, onResponse, onError }) {

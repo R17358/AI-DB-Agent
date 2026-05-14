@@ -720,12 +720,106 @@ tbody td.redacted { color: var(--red); font-size: 11px; }
   font-family: var(--font-mono);
 }
 
-/* ── Responsive ──────────────────────────────────────────────── */
-@media (max-width: 768px) {
-  .sidebar { position: absolute; transform: translateX(-100%); height: 100%; }
-  .sidebar.open { transform: translateX(0); }
+/* ── Responsive — Tablet ─────────────────────────────────────── */
+@media (max-width: 900px) {
+  :root { --sidebar-w: 220px; }
   .welcome-features { grid-template-columns: 1fr 1fr; }
-  .msg-bubble { max-width: 95%; }
+  .msg-bubble.assistant { max-width: 92%; }
+}
+
+/* ── Responsive — Mobile ─────────────────────────────────────── */
+@media (max-width: 640px) {
+  :root {
+    --sidebar-w: 80vw;
+    --header-h: 52px;
+  }
+
+  /* Sidebar overlays on mobile */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    height: 100%;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.28s cubic-bezier(.4,0,.2,1);
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  /* Dim overlay behind sidebar */
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 99;
+    animation: fadeIn 0.2s ease;
+  }
+  @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+
+  .main-area { width: 100%; }
+
+  .main-header {
+    padding: 0 12px;
+  }
+
+  .header-title { font-size: 13px; }
+  .header-meta  { display: none; }
+
+  .messages-area {
+    padding: 12px;
+    gap: 14px;
+  }
+
+  .msg-bubble {
+    max-width: 92% !important;
+    font-size: 13px;
+    padding: 10px 13px;
+  }
+
+  .welcome-screen {
+    padding: 24px 16px;
+    gap: 16px;
+  }
+  .welcome-icon  { width: 54px; height: 54px; font-size: 26px; }
+  .welcome-title { font-size: 20px; }
+  .welcome-sub   { font-size: 13px; }
+  .welcome-features {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .feature-card  { padding: 12px 10px; }
+  .feature-name  { font-size: 12px; }
+  .feature-desc  { font-size: 11px; }
+
+  /* Input area */
+  .input-area { padding: 10px 12px; }
+  .input-hints { gap: 6px; padding-top: 6px; }
+  .hint-chip   { font-size: 10px; padding: 3px 9px; }
+
+  /* Query block */
+  .query-code { font-size: 11px; }
+
+  /* Charts */
+  .chart-container { padding: 14px 10px; }
+
+  /* Table horizontal scroll */
+  .data-table-wrap { font-size: 12px; }
+  thead th, tbody td { padding: 7px 10px; }
+
+  /* Metric cards */
+  .metric-cards { grid-template-columns: 1fr 1fr; }
+  .metric-value { font-size: 18px; }
+
+  /* Results header stacks */
+  .results-header { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .view-toggle { width: 100%; }
+  .view-btn { flex: 1; justify-content: center; }
+
+  /* Status bar */
+  .status-bar { padding: 7px 12px; font-size: 11px; }
 }
 
 /* ── Live status bar ─────────────────────────────────────────── */

@@ -1,16 +1,10 @@
 import React, { useState } from 'react';
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
-   XAxis, YAxis, CartesianGrid, Tooltip,
-  Legend, ResponsiveContainer, Area, AreaChart
+  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
+  Legend, ResponsiveContainer, Area, AreaChart, RadarChart,
+  Radar, PolarGrid, PolarAngleAxis
 } from 'recharts';
-
-// import {
-//   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
-//   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
-//   Legend, ResponsiveContainer, Area, AreaChart, RadarChart,
-//   Radar, PolarGrid, PolarAngleAxis
-// } from 'recharts';
 
 const COLORS = [
   '#7c6fff', '#22d3ee', '#4ade80', '#fb923c',
